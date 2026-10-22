@@ -1,0 +1,172 @@
+name: Sync Upstream & Deploy
+
+on:
+  schedule:
+    # 每天北京时间 04:07 (UTC 20:07) 自动检查官方上游更新并构建验证部署
+    - cron: '7 20 * * *'
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: '强制执行构建与重新部署（即使无上游更新）'
+        type: boolean
+        default: false
+
+concurrency:
+  group: sync-and-deploy
+  cancel-in-progress: false
+
+jobs:
+  sync-and-deploy:
+    name: Sync & Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: ⚙️ Setup Git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: 🔍 Check and merge upstream updates
+        id: sync
+        run: |
+          git remote add upstream https://github.com/Scorpio3310/compress-pro.git || true
+          git fetch upstream main
+
+          LOCAL_REV=$(git rev-parse HEAD)
+          UPSTREAM_REV=$(git rev-parse upstream/main)
+          MERGE_BASE=$(git merge-base HEAD upstream/main)
+
+          echo "local_rev=$LOCAL_REV" >> "$GITHUB_OUTPUT"
+          echo "upstream_rev=$UPSTREAM_REV" >> "$GITHUB_OUTPUT"
+          echo "Current local revision: $LOCAL_REV"
+          echo "Current upstream revision: $UPSTREAM_REV"
+          echo "Merge base: $MERGE_BASE"
+
+          if [ "$UPSTREAM_REV" != "$MERGE_BASE" ]; then
+            echo "Upstream has new commits."
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+
+            echo "### 🔄 上游更新内容摘要" >> $GITHUB_STEP_SUMMARY
+            echo '```text' >> $GITHUB_STEP_SUMMARY
+            git log --oneline ${MERGE_BASE}..upstream/main >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+
+            # 备份定制配置文件，防止被上游意外覆盖
+            cp wrangler.jsonc wrangler.jsonc.bak
+            cp svelte.config.js svelte.config.js.bak
+            cp src/lib/seo.ts src/lib/seo.ts.bak
+            cp scripts/validate-seo.mjs scripts/validate-seo.mjs.bak
+            cp e2e/specs/agent-ready.spec.ts e2e/specs/agent-ready.spec.ts.bak
+            [ -f DEPLOY_INFO.md ] && cp DEPLOY_INFO.md DEPLOY_INFO.md.bak
+
+            # 尝试合并上游变更
+            if ! git merge upstream/main --no-edit -m "chore: sync upstream Scorpio3310/compress-pro ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))"; then
+              echo "::error::Merge conflict detected! Aborting merge to prevent breaking production."
+              git merge --abort
+              echo "merge_conflict=true" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
+            # 恢复定制配置
+            cp wrangler.jsonc.bak wrangler.jsonc
+            cp svelte.config.js.bak svelte.config.js
+            cp src/lib/seo.ts.bak src/lib/seo.ts
+            cp scripts/validate-seo.mjs.bak scripts/validate-seo.mjs
+            cp e2e/specs/agent-ready.spec.ts.bak e2e/specs/agent-ready.spec.ts
+            [ -f DEPLOY_INFO.md.bak ] && cp DEPLOY_INFO.md.bak DEPLOY_INFO.md
+            rm -f *.bak src/lib/*.bak scripts/*.bak e2e/specs/*.bak
+
+            if [ -n "$(git status --porcelain)" ]; then
+              git add wrangler.jsonc svelte.config.js src/lib/seo.ts scripts/validate-seo.mjs e2e/specs/agent-ready.spec.ts DEPLOY_INFO.md
+              git commit -m "chore: preserve custom Cloudflare deployment configuration" || true
+            fi
+
+            echo "merge_conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Repository is already up to date with upstream."
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "merge_conflict=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 🚦 Determine if deployment is needed
+        id: check_deploy
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_deploy }}" = "true" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            echo "deploy_reason=手动强制重新部署" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.sync.outputs.has_changes }}" = "true" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            echo "deploy_reason=检测到上游代码更新并成功同步" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "deploy_reason=上游无新代码且未请求强制部署" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 📦 Setup pnpm
+        if: steps.check_deploy.outputs.deploy == 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: ⚙️ Setup Node.js 22
+        if: steps.check_deploy.outputs.deploy == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 📥 Install dependencies
+        if: steps.check_deploy.outputs.deploy == 'true'
+        run: pnpm install --frozen-lockfile || pnpm install
+
+      - name: 🧪 Run lint, check, tests and build
+        if: steps.check_deploy.outputs.deploy == 'true'
+        run: |
+          pnpm lint
+          pnpm check
+          pnpm test
+          pnpm build
+          pnpm check:bundle
+
+      - name: 📤 Push merged changes to origin
+        if: steps.check_deploy.outputs.deploy == 'true' && steps.sync.outputs.has_changes == 'true'
+        run: git push origin main
+
+      - name: 🚀 Deploy to Cloudflare Workers
+        if: steps.check_deploy.outputs.deploy == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is not configured in GitHub Secrets. Please configure it to enable cloud deployments."
+            exit 1
+          fi
+          pnpm exec wrangler deploy
+
+      - name: 🩺 Post-deployment Health Check
+        if: steps.check_deploy.outputs.deploy == 'true'
+        run: |
+          echo "Waiting 5 seconds for Cloudflare edge propagation..."
+          sleep 5
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://compress.lucky.cloudns.biz/)
+          ROBOTS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://compress.lucky.cloudns.biz/robots.txt)
+          MD_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -H "Accept: text/markdown" https://compress.lucky.cloudns.biz/)
+          echo "Health check results:"
+          echo "  - Main URL: $HTTP_STATUS"
+          echo "  - Robots.txt: $ROBOTS_STATUS"
+          echo "  - Markdown content negotiation: $MD_STATUS"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "::warning::Main site returned status $HTTP_STATUS (expected 200)"
+          fi
+          echo "### 🩺 部署健康状态" >> $GITHUB_STEP_SUMMARY
+          echo "- **主站访问**：HTTP $HTTP_STATUS" >> $GITHUB_STEP_SUMMARY
+          echo "- **Robots.txt**：HTTP $ROBOTS_STATUS" >> $GITHUB_STEP_SUMMARY
+          echo "- **Markdown 协商**：HTTP $MD_STATUS" >> $GITHUB_STEP_SUMMARY

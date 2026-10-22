@@ -64,7 +64,7 @@ const config = {
 			}
 		},
 		prerender: {
-			origin: 'https://compress-pro.com',
+			origin: process.env.PUBLIC_SITE_URL ?? 'https://compress.lucky.cloudns.biz',
 			// [[tool=tool]] is a dynamic route, so its pages are not auto-entered.
 			// Keep this list in sync with FORMATS + CONVERTERS + TOOLS in src/lib/seo.ts.
 			entries: [

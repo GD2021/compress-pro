@@ -24,7 +24,7 @@ import * as publicEnv from '$env/static/public';
 // non-production host serves a Disallow robots.txt (see routes/robots.txt).
 // Wildcard import + cast: a named import fails the build when the var is unset.
 const { PUBLIC_SITE_URL } = publicEnv as { PUBLIC_SITE_URL?: string };
-export const SITE_URL = PUBLIC_SITE_URL ?? 'https://compress-pro.com';
+export const SITE_URL = PUBLIC_SITE_URL ?? 'https://compress.lucky.cloudns.biz';
 export const SITE_NAME = 'Compress Pro';
 
 export interface SeoFaq {

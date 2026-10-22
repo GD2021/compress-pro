@@ -51,7 +51,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = process.env.VALIDATE_SEO_DIST
 	? resolve(process.env.VALIDATE_SEO_DIST)
 	: join(ROOT, '.svelte-kit/cloudflare');
-const ORIGIN = 'https://compress-pro.com';
+const ORIGIN = process.env.PUBLIC_SITE_URL ?? 'https://compress.lucky.cloudns.biz';
 
 // Routes that exist only at runtime (worker/hooks), never as static files.
 const RUNTIME_ROUTES = new Set(['robots.txt']);

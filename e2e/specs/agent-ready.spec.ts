@@ -21,7 +21,7 @@ test('AR-01: tool pages have markdown twins with the right MIME', async ({ reque
 	expect(jpg.headers()['content-type']).toMatch(/text\/markdown/);
 	const body = await jpg.text();
 	expect(body).toContain('# Compress JPG images.');
-	expect(body).toContain('canonical: https://compress-pro.com/compress-jpg');
+	expect(body).toMatch(/canonical: https:\/\/[^/]+\/compress-jpg/);
 
 	const home = await request.get('/index.md');
 	expect(home.status()).toBe(200);

@@ -6,7 +6,7 @@
 	// .svelte-kit/cloudflare/_worker.js (via wrangler.adapter.jsonc), which the
 	// wrapper imports and delegates to.
 	"main": "worker/index.js",
-	"routes": [{ "pattern": "compress-pro.com", "custom_domain": true }],
+	"routes": [{ "pattern": "compress.lucky.cloudns.biz", "custom_domain": true }],
 	// workers.dev hosts would serve indexable duplicate content next to the real domain.
 	"workers_dev": false,
 	"preview_urls": false,
